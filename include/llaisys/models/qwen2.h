@@ -2,6 +2,7 @@
 #define LLAISYS_MODELS_QWEN2_H
 
 #include "../tensor.h"
+#include "../runtime.h"
 
 __C {
     struct LlaisysQwen2Meta {
