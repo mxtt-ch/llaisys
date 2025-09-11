@@ -164,42 +164,150 @@ void Tensor::debug() const {
 }
 
 bool Tensor::isContiguous() const {
-    TO_BE_IMPLEMENTED();
+    if (_meta.shape.empty()) return true;
+    
+    ptrdiff_t expected_stride = 1;
+    for (size_t i = _meta.shape.size(); i > 0; --i) {
+        if (_meta.strides[i - 1] != expected_stride) {
+            return false;
+        }
+        expected_stride *= _meta.shape[i - 1];
+    }
     return true;
 }
 
 tensor_t Tensor::permute(const std::vector<size_t> &order) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    if (order.size() != _meta.shape.size()) {
+        throw std::runtime_error("Permute: order size must match tensor dimensions");
+    }
+    
+    std::vector<bool> used(_meta.shape.size(), false);
+    for (size_t idx : order) {
+        if (idx >= _meta.shape.size()) {
+            throw std::runtime_error("Permute: invalid dimension index");
+        }
+        if (used[idx]) {
+            throw std::runtime_error("Permute: duplicate dimension index");
+        }
+        used[idx] = true;
+    }
+    
+    std::vector<size_t> new_shape(order.size());
+    std::vector<ptrdiff_t> new_strides(order.size());
+    
+    for (size_t i = 0; i < order.size(); ++i) {
+        new_shape[i] = _meta.shape[order[i]];
+        new_strides[i] = _meta.strides[order[i]];
+    }
+    
+    TensorMeta new_meta{_meta.dtype, new_shape, new_strides};
+    return std::shared_ptr<Tensor>(new Tensor(new_meta, _storage, _offset));
 }
 
 tensor_t Tensor::view(const std::vector<size_t> &shape) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    if (!this->isContiguous()) {
+        throw std::runtime_error("View: tensor must be contiguous");
+    }
+    
+    size_t new_numel = 1;
+    for (size_t dim : shape) {
+        new_numel *= dim;
+    }
+    
+    if (new_numel != this->numel()) {
+        throw std::runtime_error("View: total number of elements must remain the same");
+    }
+    
+    std::vector<ptrdiff_t> new_strides(shape.size());
+    ptrdiff_t stride = 1;
+    for (size_t i = shape.size(); i > 0; --i) {
+        new_strides[i - 1] = stride;
+        stride *= shape[i - 1];
+    }
+    
+    TensorMeta new_meta{_meta.dtype, shape, new_strides};
+    return std::shared_ptr<Tensor>(new Tensor(new_meta, _storage, _offset));
 }
 
 tensor_t Tensor::slice(size_t dim, size_t start, size_t end) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    if (dim >= _meta.shape.size()) {
+        throw std::runtime_error("Slice: dimension out of range");
+    }
+    
+    if (start >= _meta.shape[dim] || end > _meta.shape[dim] || start >= end) {
+        throw std::runtime_error("Slice: invalid start/end indices");
+    }
+    
+    std::vector<size_t> new_shape = _meta.shape;
+    std::vector<ptrdiff_t> new_strides = _meta.strides;
+    
+    new_shape[dim] = end - start;
+    
+    size_t new_offset = _offset + start * _meta.strides[dim] * this->elementSize();
+    
+    TensorMeta new_meta{_meta.dtype, new_shape, new_strides};
+    return std::shared_ptr<Tensor>(new Tensor(new_meta, _storage, new_offset));
 }
 
 void Tensor::load(const void *src_) {
-    TO_BE_IMPLEMENTED();
+    core::context().setDevice(this->deviceType(), this->deviceId());
+    core::context().runtime().api()->memcpy_sync(
+        this->data(),
+        src_,
+        this->numel() * this->elementSize(),
+        LLAISYS_MEMCPY_H2D);
 }
 
 tensor_t Tensor::contiguous() const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    if (this->isContiguous()) {
+        return std::shared_ptr<Tensor>(new Tensor(_meta, _storage, _offset));
+    }
+    
+    auto new_tensor = create(_meta.shape, _meta.dtype, this->deviceType(), this->deviceId());
+    
+    core::context().setDevice(this->deviceType(), this->deviceId());
+    core::context().runtime().api()->memcpy_sync(
+        new_tensor->data(),
+        this->data(),
+        this->numel() * this->elementSize(),
+        LLAISYS_MEMCPY_D2D);
+    
+    return new_tensor;
 }
 
 tensor_t Tensor::reshape(const std::vector<size_t> &shape) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    size_t new_numel = 1;
+    for (size_t dim : shape) {
+        new_numel *= dim;
+    }
+    
+    if (new_numel != this->numel()) {
+        throw std::runtime_error("Reshape: total number of elements must remain the same");
+    }
+    
+    if (this->isContiguous()) {
+        return this->view(shape);
+    }
+    
+    auto contiguous_tensor = this->contiguous();
+    return contiguous_tensor->view(shape);
 }
 
 tensor_t Tensor::to(llaisysDeviceType_t device_type, int device) const {
-    TO_BE_IMPLEMENTED();
-    return std::shared_ptr<Tensor>(new Tensor(_meta, _storage));
+    if (device_type == this->deviceType() && device == this->deviceId()) {
+        return std::shared_ptr<Tensor>(new Tensor(_meta, _storage, _offset));
+    }
+    
+    auto new_tensor = create(_meta.shape, _meta.dtype, device_type, device);
+    
+    core::context().setDevice(this->deviceType(), this->deviceId());
+    core::context().runtime().api()->memcpy_sync(
+        new_tensor->data(),
+        this->data(),
+        this->numel() * this->elementSize(),
+        LLAISYS_MEMCPY_D2D);
+    
+    return new_tensor;
 }
 
 } // namespace llaisys
